@@ -37,6 +37,14 @@ public abstract sealed class Compte permits CompteCourant , CompteEpargne {
         return solde;
     }
 
+    public BigDecimal setSolde(BigDecimal newSolde) {
+        if (newSolde == null || newSolde.compareTo(BigDecimal.ZERO) < 0){
+            throw new IllegalArgumentException("Le solde doit être positif");
+        }
+        this.solde = newSolde;
+        return this.solde;
+    }
+
     public Long getIdClient() {
         return idClient;
     }
