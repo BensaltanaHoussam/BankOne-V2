@@ -79,5 +79,13 @@ public class ClientDAOImpl implements ClientDAO {
         }
     }
 
+    private Client map(ResultSet rs) throws SQLException {
+        return new Client(
+                rs.getLong("id"),
+                rs.getString("nom"),
+                rs.getString("email")
+        );
+    }
+
 
 }
