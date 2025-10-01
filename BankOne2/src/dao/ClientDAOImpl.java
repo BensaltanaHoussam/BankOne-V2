@@ -25,9 +25,9 @@ public class ClientDAOImpl implements ClientDAO {
             ps.setString(2, client.getEmail());
             ps.executeUpdate();
             try (ResultSet rs = ps.getGeneratedKeys()) {
-                if (rs.next())return client.withId(rs.getLong(1));
+                if (rs.next()) return client.withId(rs.getLong(1));
             }
-           throw new RuntimeException("Aucune clé générée pour le client");
+            throw new RuntimeException("Aucune clé générée pour le client");
         } catch (SQLException e) {
             throw new RuntimeException("Erreur save Client", e);
         }
@@ -38,13 +38,13 @@ public class ClientDAOImpl implements ClientDAO {
         final String sql = "SELECT id,nom,email FROM Client WHERE id =?";
         try (Connection cn = dataSource.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
-            ps.setLong(1,id);
+            ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return Optional.of(map(rs));
                 } else {
                     return Optional.empty();
-                }catch (SQLException e) {
+                }catch(SQLException e){
                     throw new RuntimeException("Erreur findById Client", e);
                 }
             }
@@ -65,6 +65,19 @@ public class ClientDAOImpl implements ClientDAO {
         }
     }
 
+    @Override
+    public boolean update(Client client) {
+        final String sql = "UPDATE Client SET nom=?, email=? WHERE id=?";
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setString(1, client.nom());
+            ps.setString(2, client.email());
+            ps.setLong(3, client.id());
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur update Client", e);
+        }
+    }
 
 
 }
