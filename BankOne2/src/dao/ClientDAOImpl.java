@@ -51,6 +51,20 @@ public class ClientDAOImpl implements ClientDAO {
         }
     }
 
+    @Override
+    public List<Client> findAll() {
+        final String sql = "SELECT id, nom, email FROM Client";
+        List<Client> list = new ArrayList<>();
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) list.add(map(rs));
+            return list;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur findAll Client", e);
+        }
+    }
+
 
 
 }
