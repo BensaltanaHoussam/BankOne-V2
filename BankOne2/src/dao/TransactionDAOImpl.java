@@ -108,6 +108,19 @@ public class TransactionDAOImpl implements TransactionDAO {
         }
     }
 
+    @Override
+    public List<Transaction> findAll() {
+        final String sql = "SELECT id, date, montant, type, lieu, idCompte FROM Transaction";
+        List<Transaction> list = new ArrayList<>();
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) list.add(map(rs));
+            return list;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur findAll Transaction", e);
+        }
+    }
 
 
 
