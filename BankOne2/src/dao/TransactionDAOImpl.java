@@ -70,6 +70,44 @@ public class TransactionDAOImpl implements TransactionDAO {
         }
     }
 
+    @Override
+    public List<Transaction> search(Long idCompte,
+                                    LocalDate dateDebut,
+                                    LocalDate dateFin,
+                                    TypeTransaction type,
+                                    BigDecimal minMontant,
+                                    BigDecimal maxMontant,
+                                    String lieu) {
+        StringBuilder sql = new StringBuilder("SELECT id, date, montant, type, lieu, idCompte FROM Transaction WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+
+        if (idCompte != null) { sql.append(" AND idCompte=?"); params.add(idCompte); }
+        if (dateDebut != null) { sql.append(" AND date >= ?"); params.add(Timestamp.valueOf(dateDebut.atStartOfDay())); }
+        if (dateFin != null) { sql.append(" AND date < ?"); params.add(Timestamp.valueOf(dateFin.plusDays(1).atStartOfDay())); }
+        if (type != null) { sql.append(" AND type=?"); params.add(type.name()); }
+        if (minMontant != null) { sql.append(" AND montant >= ?"); params.add(minMontant); }
+        if (maxMontant != null) { sql.append(" AND montant <= ?"); params.add(maxMontant); }
+        if (lieu != null && !lieu.isBlank()) { sql.append(" AND LOWER(lieu) LIKE ?"); params.add("%" + lieu.toLowerCase() + "%"); }
+
+        List<Transaction> list = new ArrayList<>();
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) {
+                Object p = params.get(i);
+                if (p instanceof Timestamp ts) ps.setTimestamp(i + 1, ts);
+                else if (p instanceof BigDecimal bd) ps.setBigDecimal(i + 1, bd);
+                else if (p instanceof Long l) ps.setLong(i + 1, l);
+                else ps.setObject(i + 1, p);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(map(rs));
+            }
+            return list;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur search Transaction", e);
+        }
+    }
+
 
 
 
