@@ -21,13 +21,15 @@ public class ClientDAOImpl implements ClientDAO {
         final String sql = "INSERT INTO Client(nom, email) VALUES(?, ?)";
         try (Connection cn = dataSource.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-            ps.setString(1, client.getNom());
-            ps.setString(2, client.getEmail());
+            ps.setString(1, client.nom());
+            ps.setString(2, client.email());
             ps.executeUpdate();
             try (ResultSet rs = ps.getGeneratedKeys()) {
-                if (rs.next()) return client.withId(rs.getLong(1));
+                if (rs.next()) {
+                    return client.withId(rs.getLong(1));
+                }
             }
-            throw new RuntimeException("Aucune clé générée pour le client");
+            throw new RuntimeException("Aucune clé générée pour Client");
         } catch (SQLException e) {
             throw new RuntimeException("Erreur save Client", e);
         }
@@ -35,19 +37,16 @@ public class ClientDAOImpl implements ClientDAO {
 
     @Override
     public Optional<Client> findById(Long id) {
-        final String sql = "SELECT id,nom,email FROM Client WHERE id =?";
+        final String sql = "SELECT id, nom, email FROM Client WHERE id=?";
         try (Connection cn = dataSource.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(map(rs));
-                } else {
-                    return Optional.empty();
-                }catch(SQLException e){
-                    throw new RuntimeException("Erreur findById Client", e);
-                }
+                if (rs.next()) return Optional.of(map(rs));
             }
+            return Optional.empty();
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur findById Client", e);
         }
     }
 
@@ -79,6 +78,18 @@ public class ClientDAOImpl implements ClientDAO {
         }
     }
 
+    @Override
+    public boolean delete(Long id) {
+        final String sql = "DELETE FROM Client WHERE id=?";
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur delete Client", e);
+        }
+    }
+
     private Client map(ResultSet rs) throws SQLException {
         return new Client(
                 rs.getLong("id"),
@@ -86,6 +97,4 @@ public class ClientDAOImpl implements ClientDAO {
                 rs.getString("email")
         );
     }
-
-
 }
