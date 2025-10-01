@@ -13,4 +13,21 @@ public record Client (Long id , String nom , String email) {
     public Client withId(Long newId) {
         return new Client(newId, this.nom, this.email);
     }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getNom() {
+        return nom;
+    }
+
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setId(long aLong) {
+
+    }
 }
