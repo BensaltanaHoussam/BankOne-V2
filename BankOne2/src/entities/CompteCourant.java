@@ -30,4 +30,7 @@ public final class CompteCourant extends Compte {
     public String typeCompte() {
         return "COURANT";
     }
+
+    public BigDecimal getDecouvertAutorise() { return decouvertAutorise; }
+
 }
