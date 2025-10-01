@@ -33,6 +33,24 @@ public class ClientDAOImpl implements ClientDAO {
         }
     }
 
+    @Override
+    public Optional<Client> findById(Long id) {
+        final String sql = "SELECT id,nom,email FROM Client WHERE id =?";
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setLong(1,id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(map(rs));
+                } else {
+                    return Optional.empty();
+                }catch (SQLException e) {
+                    throw new RuntimeException("Erreur findById Client", e);
+                }
+            }
+        }
+    }
+
 
 
 }
