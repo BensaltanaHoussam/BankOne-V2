@@ -122,7 +122,26 @@ public class TransactionDAOImpl implements TransactionDAO {
         }
     }
 
+    @Override
+    public boolean delete(long id) {
+        final String sql = "DELETE FROM Transaction WHERE id=?";
+        try (Connection cn = dataSource.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erreur delete Transaction", e);
+        }
+    }
 
-
-
+    private Transaction map(ResultSet rs) throws SQLException {
+        return new Transaction(
+                rs.getLong("id"),
+                rs.getTimestamp("date").toLocalDateTime(),
+                rs.getBigDecimal("montant"),
+                TypeTransaction.valueOf(rs.getString("type")),
+                rs.getString("lieu"),
+                rs.getLong("idCompte")
+        );
+    }
 }
