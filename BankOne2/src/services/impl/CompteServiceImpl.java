@@ -1,14 +1,17 @@
 package services.impl;
 
-import dao.ClientDAO;
 import dao.CompteDAO;
+import dao.ClientDAO;
 import entities.Compte;
 import entities.CompteCourant;
 import entities.CompteEpargne;
 import services.CompteService;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Optional;
 
 public class CompteServiceImpl implements CompteService {
 
@@ -20,82 +23,83 @@ public class CompteServiceImpl implements CompteService {
         this.clientDAO = clientDAO;
     }
 
-    private void ensureClient(Long idClient) {
-        clientDAO.findById(idClient).orElseThrow(() -> new RuntimeException("Client introuvable id=" + idClient));
+    @Override
+    public Compte creerCompteCourant(long idClient, BigDecimal solde, BigDecimal decouvert) {
+        verifierClient(idClient);
+        Compte c = new CompteCourant(null, genererNumero(), solde, idClient, decouvert);
+        return compteDAO.save(c);
     }
 
     @Override
-    public CompteCourant createCompteCourant(String numero, BigDecimal soldeInit, Long clientId, BigDecimal decouvert) {
-        ensureClient(clientId);
-        if (decouvert == null || decouvert.signum() < 0) throw new IllegalArgumentException("Découvert >= 0");
-        CompteCourant cc = new CompteCourant(null, numero, soldeInit, clientId, decouvert);
-        return (CompteCourant) compteDAO.save(cc);
+    public Compte creerCompteEpargne(long idClient, BigDecimal solde, BigDecimal taux) {
+        verifierClient(idClient);
+        Compte c = new CompteEpargne(null, genererNumero(), solde, idClient, taux);
+        return compteDAO.save(c);
     }
 
     @Override
-    public CompteEpargne createCompteEpargne(String numero, BigDecimal soldeInit, Long clientId, BigDecimal taux) {
-        ensureClient(clientId);
-        if (taux == null || taux.signum() < 0) throw new IllegalArgumentException("Taux >= 0");
-        CompteEpargne ce = new CompteEpargne(null, numero, soldeInit, clientId, taux);
-        return (CompteEpargne) compteDAO.save(ce);
+    public Compte mettreAJourSolde(long idCompte, BigDecimal nouveauSolde) {
+        Compte c = chargerCompte(idCompte);
+        c.setSolde(nouveauSolde);
+        if (!compteDAO.update(c)) throw new RuntimeException("Échec update solde");
+        return chargerCompte(idCompte);
     }
 
     @Override
-    public Compte get(Long id) {
-        return compteDAO.findById(id).orElseThrow(() -> new RuntimeException("Compte introuvable id=" + id));
-    }
-
-    @Override
-    public Compte getByNumero(String numero) {
-        return compteDAO.findByNumero(numero).orElseThrow(() -> new RuntimeException("Compte introuvable num=" + numero));
-    }
-
-    @Override
-    public List<Compte> list() {
-        return compteDAO.findAll();
-    }
-
-    @Override
-    public List<Compte> listByClient(Long clientId) {
-        ensureClient(clientId);
-        return compteDAO.findByClient(clientId);
-    }
-
-    @Override
-    public Compte crediter(Long compteId, BigDecimal montant) {
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        Compte c = get(compteId);
-        c.crediter(montant);
-        compteDAO.update(c);
-        return c;
-    }
-
-    @Override
-    public Compte debiter(Long compteId, BigDecimal montant) {
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        Compte c = get(compteId);
-        BigDecimal soldeApres = c.getSolde().subtract(montant);
-        if (c instanceof CompteCourant cc) {
-            BigDecimal limite = cc.getDecouvertAutorise().negate();
-            if (soldeApres.compareTo(limite) < 0) {
-                throw new RuntimeException("Solde insuffisant (dépasse découvert)");
-            }
+    public void mettreAJourDecouvert(long idCompte, BigDecimal nouveauDecouvert) {
+        Compte c = chargerCompte(idCompte);
+        if (c instanceof entities.CompteCourant cc) {
+            cc.setDecouvertAutorise(nouveauDecouvert);
+            if (!compteDAO.update(cc)) throw new RuntimeException("Échec update découvert");
         } else {
-            if (soldeApres.compareTo(BigDecimal.ZERO) < 0) {
-                throw new RuntimeException("Solde insuffisant");
-            }
+            throw new IllegalArgumentException("Compte non COURANT");
         }
-        c.debiter(montant);
-        compteDAO.update(c);
-        return c;
     }
 
     @Override
-    public void virement(Long sourceId, Long destId, BigDecimal montant, String lieu) {
-        if (sourceId.equals(destId)) throw new IllegalArgumentException("Comptes identiques");
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        debiter(sourceId, montant);
-        crediter(destId, montant);
-        // Les transactions elles-mêmes seront enregistrées dans TransactionService (séparation de responsabilités)
+    public void mettreAJourTaux(long idCompte, BigDecimal nouveauTaux) {
+        Compte c = chargerCompte(idCompte);
+        if (c instanceof entities.CompteEpargne ce) {
+            ce.setTauxInteret(nouveauTaux);
+            if (!compteDAO.update(ce)) throw new RuntimeException("Échec update taux");
+        } else {
+            throw new IllegalArgumentException("Compte non EPARGNE");
+        }
+    }
+
+    @Override
+    public List<Compte> comptesDuClient(long idClient) {
+        return compteDAO.findByClient(idClient);
+    }
+
+    @Override
+    public Optional<Compte> compteSoldeMax(Long idClient) {
+        return (idClient == null ? compteDAO.findAll() : compteDAO.findByClient(idClient))
+                .stream().max(Comparator.comparing(Compte::getSolde));
+    }
+
+    @Override
+    public Optional<Compte> compteSoldeMin(Long idClient) {
+        return (idClient == null ? compteDAO.findAll() : compteDAO.findByClient(idClient))
+                .stream().min(Comparator.comparing(Compte::getSolde));
+    }
+
+    @Override
+    public Compte findById(long id) {
+        return chargerCompte(id);
+    }
+
+    private Compte chargerCompte(long id) {
+        return compteDAO.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Compte introuvable id=" + id));
+    }
+
+    private void verifierClient(long idClient) {
+        clientDAO.findById(idClient)
+                .orElseThrow(() -> new NoSuchElementException("Client introuvable id=" + idClient));
+    }
+
+    private String genererNumero() {
+        return "C-" + java.util.UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 }

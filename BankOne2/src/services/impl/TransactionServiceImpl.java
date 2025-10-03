@@ -3,18 +3,20 @@ package services.impl;
 import dao.CompteDAO;
 import dao.TransactionDAO;
 import entities.Compte;
-import entities.CompteCourant;
 import entities.Transaction;
 import enums.TypeTransaction;
 import services.TransactionService;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class TransactionServiceImpl implements TransactionService {
+
+    private static final int MOYENNE_SCALE = 2;
 
     private final TransactionDAO transactionDAO;
     private final CompteDAO compteDAO;
@@ -24,91 +26,159 @@ public class TransactionServiceImpl implements TransactionService {
         this.compteDAO = compteDAO;
     }
 
-    private Compte getCompte(Long id) {
-        return compteDAO.findById(id).orElseThrow(() -> new RuntimeException("Compte introuvable id=" + id));
+    @Override
+    public Transaction depot(long idCompte, BigDecimal montant, String lieu) {
+        Compte c = chargerCompte(idCompte);
+        validerMontant(montant);
+        c.setSolde(c.getSolde().add(montant));
+        if (!compteDAO.update(c)) throw new RuntimeException("Échec update solde");
+        return transactionDAO.save(new Transaction(null, idCompte, null, montant, TypeTransaction.DEPOT, LocalDateTime.now(), lieu));
     }
 
-    private void checkRetraitPossible(Compte c, BigDecimal montant) {
-        BigDecimal soldeApres = c.getSolde().subtract(montant);
-        if (c instanceof CompteCourant cc) {
-            BigDecimal limite = cc.getDecouvertAutorise().negate();
-            if (soldeApres.compareTo(limite) < 0) throw new RuntimeException("Solde insuffisant");
-        } else {
-            if (soldeApres.compareTo(BigDecimal.ZERO) < 0) throw new RuntimeException("Solde insuffisant");
+    @Override
+    public Transaction retrait(long idCompte, BigDecimal montant, String lieu) {
+        Compte c = chargerCompte(idCompte);
+        validerMontant(montant);
+        if (c.getSolde().compareTo(montant) < 0) throw new IllegalArgumentException("Solde insuffisant");
+        c.setSolde(c.getSolde().subtract(montant));
+        if (!compteDAO.update(c)) throw new RuntimeException("Échec update solde");
+        return transactionDAO.save(new Transaction(null, idCompte, null, montant, TypeTransaction.RETRAIT, LocalDateTime.now(), lieu));
+    }
+
+    @Override
+    public Transaction virement(long idSource, long idDestination, BigDecimal montant, String lieu) {
+        if (idSource == idDestination) throw new IllegalArgumentException("Comptes identiques");
+        Compte src = chargerCompte(idSource);
+        Compte dst = chargerCompte(idDestination);
+        validerMontant(montant);
+        if (src.getSolde().compareTo(montant) < 0) throw new IllegalArgumentException("Solde insuffisant");
+        src.setSolde(src.getSolde().subtract(montant));
+        dst.setSolde(dst.getSolde().add(montant));
+        if (!compteDAO.update(src) || !compteDAO.update(dst)) throw new RuntimeException("Échec update comptes");
+        return transactionDAO.save(new Transaction(null, idSource, idDestination, montant, TypeTransaction.VIREMENT, LocalDateTime.now(), lieu));
+    }
+
+    @Override
+    public List<Transaction> transactionsCompte(long idCompte) {
+        return transactionDAO.findByCompte(idCompte);
+    }
+
+    @Override
+    public List<Transaction> transactionsClient(long idClient) {
+        return compteDAO.findByClient(idClient).stream()
+                .flatMap(c -> transactionDAO.findByCompte(c.getId()).stream())
+                .sorted(Comparator.comparing(Transaction::date).reversed())
+                .toList();
+    }
+
+    @Override
+    public List<Transaction> filtrerTransactions(Long idClient,
+                                                 Long idCompte,
+                                                 BigDecimal min,
+                                                 BigDecimal max,
+                                                 TypeTransaction type,
+                                                 LocalDateTime debut,
+                                                 LocalDateTime fin,
+                                                 String lieu) {
+        return baseListe(idClient, idCompte).stream()
+                .filter(t -> min == null || t.montant().compareTo(min) >= 0)
+                .filter(t -> max == null || t.montant().compareTo(max) <= 0)
+                .filter(t -> type == null || t.type() == type)
+                .filter(t -> debut == null || !t.date().isBefore(debut))
+                .filter(t -> fin == null || !t.date().isAfter(fin))
+                .filter(t -> lieu == null || t.lieu().equalsIgnoreCase(lieu))
+                .sorted(Comparator.comparing(Transaction::date).reversed())
+                .toList();
+    }
+
+    @Override
+    public Map<TypeTransaction, List<Transaction>> grouperParType(Long idClient, Long idCompte) {
+        return baseListe(idClient, idCompte).stream()
+                .collect(Collectors.groupingBy(Transaction::type, LinkedHashMap::new, Collectors.toList()));
+    }
+
+    @Override
+    public Map<String, List<Transaction>> grouperParPeriode(Long idClient, Long idCompte, String periode) {
+        boolean parJour = "JOUR".equalsIgnoreCase(periode);
+        return baseListe(idClient, idCompte).stream()
+                .collect(Collectors.groupingBy(t -> {
+                    LocalDateTime d = t.date();
+                    return parJour ? d.toLocalDate().toString()
+                            : d.getYear() + "-" + String.format("%02d", d.getMonthValue());
+                }, LinkedHashMap::new, Collectors.toList()));
+    }
+
+    @Override
+    public BigDecimal totalTransactions(Long idClient, Long idCompte) {
+        return baseListe(idClient, idCompte).stream()
+                .map(Transaction::montant)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    @Override
+    public BigDecimal moyenneTransactions(Long idClient, Long idCompte) {
+        List<Transaction> list = baseListe(idClient, idCompte);
+        if (list.isEmpty()) return BigDecimal.ZERO;
+        BigDecimal total = totalTransactions(idClient, idCompte);
+        return total.divide(BigDecimal.valueOf(list.size()), MOYENNE_SCALE, RoundingMode.HALF_UP);
+    }
+
+    @Override
+    public Map<String, List<Transaction>> detecterSuspicious(BigDecimal seuilMontant, int maxParMinute) {
+        final BigDecimal seuil = (seuilMontant == null ? BigDecimal.ZERO : seuilMontant);
+        List<Transaction> all = transactionDAO.findAll();
+        Map<String, List<Transaction>> res = new LinkedHashMap<>();
+
+        List<Transaction> montant = all.stream()
+                .filter(t -> t.montant().compareTo(seuil) > 0)
+                .toList();
+        if (!montant.isEmpty()) res.put("MONTANT", montant);
+
+        Map<Long, List<Transaction>> parCompte = new HashMap<>();
+        for (Transaction t : all) {
+            Long key = t.idCompteSource() != null ? t.idCompteSource()
+                    : (t.idCompteDestination() != null ? t.idCompteDestination() : -1L);
+            parCompte.computeIfAbsent(key, k -> new ArrayList<>()).add(t);
         }
+
+        List<Transaction> freq = new ArrayList<>();
+        for (List<Transaction> l : parCompte.values()) {
+            l.sort(Comparator.comparing(Transaction::date));
+            for (int i = 0; i < l.size(); i++) {
+                LocalDateTime base = l.get(i).date().truncatedTo(ChronoUnit.MINUTES);
+                int count = 1;
+                List<Transaction> window = new ArrayList<>();
+                window.add(l.get(i));
+                for (int j = i + 1; j < l.size(); j++) {
+                    if (l.get(j).date().truncatedTo(ChronoUnit.MINUTES).equals(base)) {
+                        count++;
+                        window.add(l.get(j));
+                    } else break;
+                }
+                if (count > maxParMinute) {
+                    for (Transaction t : window) {
+                        if (!freq.contains(t)) freq.add(t);
+                    }
+                }
+            }
+        }
+        if (!freq.isEmpty()) res.put("FREQUENCE", freq);
+        return res;
     }
 
-    private Transaction buildTx(Long id, BigDecimal montant, TypeTransaction type, String lieu, Long compteId) {
-        return new Transaction(id, LocalDateTime.now(), montant, type, lieu, compteId);
-    }
-
-    @Override
-    public Transaction verser(Long compteId, BigDecimal montant, String lieu) {
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        Compte c = getCompte(compteId);
-        c.crediter(montant);
-        compteDAO.update(c);
-        return transactionDAO.save(buildTx(null, montant, TypeTransaction.VERSEMENT, lieu, c.getId()));
-    }
-
-    @Override
-    public Transaction retirer(Long compteId, BigDecimal montant, String lieu) {
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        Compte c = getCompte(compteId);
-        checkRetraitPossible(c, montant);
-        c.debiter(montant);
-        compteDAO.update(c);
-        return transactionDAO.save(buildTx(null, montant, TypeTransaction.RETRAIT, lieu, c.getId()));
-    }
-
-    @Override
-    public List<Transaction> virement(Long sourceId, Long destId, BigDecimal montant, String lieu) {
-        if (sourceId.equals(destId)) throw new IllegalArgumentException("Comptes identiques");
-        if (montant == null || montant.signum() <= 0) throw new IllegalArgumentException("Montant > 0");
-        Compte src = getCompte(sourceId);
-        Compte dst = getCompte(destId);
-        checkRetraitPossible(src, montant);
-
-        // Débit
-        src.debiter(montant);
-        compteDAO.update(src);
-        Transaction tSrc = transactionDAO.save(buildTx(null, montant, TypeTransaction.VIREMENT, lieu, src.getId()));
-
-        // Crédit
-        dst.crediter(montant);
-        compteDAO.update(dst);
-        Transaction tDst = transactionDAO.save(buildTx(null, montant, TypeTransaction.VERSEMENT, lieu, dst.getId()));
-
-        List<Transaction> result = new ArrayList<>();
-        result.add(tSrc);
-        result.add(tDst);
-        return result;
-    }
-
-    @Override
-    public Transaction get(Long id) {
-        return transactionDAO.findById(id).orElseThrow(() -> new RuntimeException("Transaction introuvable id=" + id));
-    }
-
-    @Override
-    public List<Transaction> listCompte(Long compteId) {
-        getCompte(compteId);
-        return transactionDAO.findByCompte(compteId);
-    }
-
-    @Override
-    public List<Transaction> search(Long compteId, LocalDate debut, LocalDate fin, TypeTransaction type,
-                                    BigDecimal min, BigDecimal max, String lieu) {
-        return transactionDAO.search(compteId, debut, fin, type, min, max, lieu);
-    }
-
-    @Override
-    public List<Transaction> listAll() {
+    private List<Transaction> baseListe(Long idClient, Long idCompte) {
+        if (idCompte != null) return transactionDAO.findByCompte(idCompte);
+        if (idClient != null) return transactionsClient(idClient);
         return transactionDAO.findAll();
     }
 
-    @Override
-    public boolean delete(Long id) {
-        return transactionDAO.delete(id);
+    private Compte chargerCompte(long id) {
+        return compteDAO.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Compte introuvable"));
+    }
+
+    private void validerMontant(BigDecimal m) {
+        if (m == null || m.compareTo(BigDecimal.ZERO) <= 0)
+            throw new IllegalArgumentException("Montant invalide");
     }
 }

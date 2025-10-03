@@ -72,7 +72,6 @@ public abstract sealed class Compte permits CompteCourant , CompteEpargne {
     }
 
 
-
-
-
+    public void setNumero(String s) {
+    }
 }

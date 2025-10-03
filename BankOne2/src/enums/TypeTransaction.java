@@ -1,7 +1,7 @@
 package enums;
 
 public enum TypeTransaction {
-    VERSEMENT,
+    DEPOT,
     RETRAIT,
     VIREMENT
 }

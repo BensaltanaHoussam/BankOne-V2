@@ -10,13 +10,10 @@ import enums.TypeTransaction;
 import services.RapportService;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.YearMonth;
-import java.time.ZoneOffset;
+import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class RapportServiceImpl implements RapportService {
 
@@ -33,106 +30,103 @@ public class RapportServiceImpl implements RapportService {
     @Override
     public List<Client> topClientsParSolde(int topN) {
         if (topN <= 0) topN = 5;
-
-        Map<Long, BigDecimal> totalParClient = compteDAO.findAll().stream()
-                .collect(Collectors.groupingBy(Compte::getIdClient,
-                        Collectors.reducing(BigDecimal.ZERO, Compte::getSolde, BigDecimal::add)));
-
-        Map<Long, Client> clients = clientDAO.findAll().stream()
+        Map<Long, BigDecimal> soldeParClient = new HashMap<>();
+        for (Compte c : compteDAO.findAll()) {
+            soldeParClient.merge(c.getIdClient(), c.getSolde(), BigDecimal::add);
+        }
+        Map<Long, Client> mapClients = clientDAO.findAll().stream()
                 .collect(Collectors.toMap(Client::id, c -> c));
-
-        return totalParClient.entrySet().stream()
-                .map(e -> clients.get(e.getKey()))
+        return soldeParClient.entrySet().stream()
+                .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                .map(e -> mapClients.get(e.getKey()))
                 .filter(Objects::nonNull)
-                .sorted(Comparator.comparing((Client c) -> totalParClient.get(c.id())).reversed())
                 .limit(topN)
                 .toList();
     }
 
     @Override
     public Map<TypeTransaction, Map<String, Object>> rapportMensuel(int year, int month) {
-        LocalDateTime start = YearMonth.of(year, month).atDay(1).atStartOfDay();
-        LocalDateTime end = start.plusMonths(1);
-
-        return Arrays.stream(TypeTransaction.values())
-                .collect(Collectors.toMap(t -> t, t -> {
-                    List<Transaction> txs = transactionDAO.findAll().stream()
-                            .filter(tx -> tx.type() == t && !tx.date().isBefore(start) && tx.date().isBefore(end))
-                            .toList();
-                    return Map.of(
-                            "nombre", (long) txs.size(),
-                            "volume", txs.stream().map(Transaction::montant).reduce(BigDecimal.ZERO, BigDecimal::add)
-                    );
-                }, (a, b) -> a, () -> new EnumMap<>(TypeTransaction.class)));
+        YearMonth ym = YearMonth.of(year, month);
+        LocalDateTime start = ym.atDay(1).atStartOfDay();
+        LocalDateTime end = ym.atEndOfMonth().plusDays(1).atStartOfDay();
+        Map<TypeTransaction, Map<String, Object>> res = new EnumMap<>(TypeTransaction.class);
+        for (TypeTransaction t : TypeTransaction.values()) {
+            Map<String, Object> st = new HashMap<>();
+            st.put("nombre", 0L);
+            st.put("volume", BigDecimal.ZERO);
+            res.put(t, st);
+        }
+        for (Transaction t : transactionDAO.findAll()) {
+            if (t.date().isBefore(start) || !t.date().isBefore(end)) continue;
+            Map<String, Object> st = res.get(t.type());
+            st.put("nombre", (Long) st.get("nombre") + 1);
+            st.put("volume", ((BigDecimal) st.get("volume")).add(t.montant()));
+        }
+        return res;
     }
 
     @Override
-    public Map<String, List<Transaction>> detecterSuspicious(BigDecimal seuil, int maxOpsParMinute) {
-        seuil = (seuil == null) ? BigDecimal.valueOf(10000) : seuil;
+    public Map<String, List<Transaction>> detecterSuspicious(BigDecimal seuilMontant, int maxOpsParMinute) {
+        if (seuilMontant == null) seuilMontant = new BigDecimal("10000");
         if (maxOpsParMinute <= 0) maxOpsParMinute = 5;
-
         List<Transaction> all = transactionDAO.findAll();
-        Map<Long, List<Transaction>> parCompte = all.stream().collect(Collectors.groupingBy(Transaction::idCompteSource));
 
-        // 1. Montants élevés
-        BigDecimal finalSeuil = seuil;
-        List<Transaction> montantsEleves = all.stream().filter(t -> t.montant().compareTo(finalSeuil) > 0).toList();
+        BigDecimal finalSeuilMontant = seuilMontant;
+        List<Transaction> montantsEleves = all.stream()
+                .filter(t -> t.montant().compareTo(finalSeuilMontant) > 0).toList();
 
-        // 2. Lieux inhabituels
-        List<Transaction> lieuxInhabituels = parCompte.values().stream()
-                .flatMap(txs -> {
-                    if (txs.size() < 5) return Stream.empty();
-                    String lieuMajoritaire = txs.stream()
-                            .collect(Collectors.groupingBy(Transaction::lieu, Collectors.counting()))
-                            .entrySet().stream().max(Map.Entry.comparingByValue())
-                            .map(Map.Entry::getKey).orElse(null);
-                    return txs.stream().filter(t -> lieuMajoritaire != null && !t.lieu().equalsIgnoreCase(lieuMajoritaire));
-                }).distinct().toList();
+        Map<Long, List<Transaction>> parCompte = all.stream()
+                .collect(Collectors.groupingBy(Transaction::idCompteSource));
 
-        // 3. Rafales
-        int finalMaxOpsParMinute = maxOpsParMinute;
-        List<Transaction> rafales = parCompte.values().stream()
-                .flatMap(txs -> {
-                    List<Transaction> sorted = txs.stream().sorted(Comparator.comparing(Transaction::date)).toList();
-                    List<Transaction> res = new ArrayList<>();
-                    for (int l = 0, r = 0; r < sorted.size(); r++) {
-                        while (l < r && secondsBetween(sorted.get(l).date(), sorted.get(r).date()) >= 60) l++;
-                        if (r - l + 1 > finalMaxOpsParMinute) res.add(sorted.get(r));
-                    }
-                    return res.stream();
-                }).distinct().toList();
+        List<Transaction> lieuxInhabituels = new ArrayList<>();
+        for (List<Transaction> txs : parCompte.values()) {
+            if (txs.size() < 5) continue;
+            String major = txs.stream()
+                    .collect(Collectors.groupingBy(Transaction::lieu, Collectors.counting()))
+                    .entrySet().stream().max(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey).orElse(null);
+            if (major == null) continue;
+            txs.stream().filter(t -> !t.lieu().equalsIgnoreCase(major))
+                    .distinct().forEach(lieuxInhabituels::add);
+        }
 
-        return Map.of("montantsEleves", montantsEleves,
-                "lieuxInhabituels", lieuxInhabituels,
-                "rafales", rafales);
+        List<Transaction> rafales = new ArrayList<>();
+        for (List<Transaction> txs : parCompte.values()) {
+            List<Transaction> tri = txs.stream()
+                    .sorted(Comparator.comparing(Transaction::date)).toList();
+            int left = 0;
+            for (int right = 0; right < tri.size(); right++) {
+                while (left < right &&
+                        ChronoUnit.SECONDS.between(tri.get(left).date(), tri.get(right).date()) >= 60) {
+                    left++;
+                }
+                if (right - left + 1 > maxOpsParMinute) {
+                    rafales.add(tri.get(right));
+                }
+            }
+        }
+
+        Map<String, List<Transaction>> res = new LinkedHashMap<>();
+        res.put("montantsEleves", montantsEleves);
+        res.put("lieuxInhabituels", lieuxInhabituels.stream().distinct().toList());
+        res.put("rafales", rafales.stream().distinct().toList());
+        return res;
     }
 
     @Override
     public List<Long> comptesInactifsDepuis(LocalDate dateSeuil) {
-        LocalDateTime seuil = Objects.requireNonNull(dateSeuil).atStartOfDay();
-
-        Map<Long, LocalDateTime> lastByCompte = transactionDAO.findAll().stream()
-                .collect(Collectors.groupingBy(Transaction::idCompteSource,
-                        Collectors.mapping(Transaction::date,
-                                Collectors.reducing(LocalDateTime.MIN, (a, b) -> a.isAfter(b) ? a : b))));
-
-        return compteDAO.findAll().stream()
-                .filter(c -> lastByCompte.getOrDefault(c.getId(), LocalDateTime.MIN).isBefore(seuil))
-                .map(Compte::getId)
-                .toList();
-    }
-
-    @Override
-    public Map<String, Object> genererRapportGlobal(int year, int month, BigDecimal seuil, int maxOpsParMinute, LocalDate dateInactivite) {
-        return Map.of(
-                "topClients", topClientsParSolde(5),
-                "rapportMensuel", rapportMensuel(year, month),
-                "suspicious", detecterSuspicious(seuil, maxOpsParMinute),
-                "comptesInactifs", comptesInactifsDepuis(dateInactivite)
-        );
-    }
-
-    private long secondsBetween(LocalDateTime a, LocalDateTime b) {
-        return Math.abs(b.toEpochSecond(ZoneOffset.UTC) - a.toEpochSecond(ZoneOffset.UTC));
+        if (dateSeuil == null) throw new IllegalArgumentException("date requise");
+        LocalDateTime seuil = dateSeuil.atStartOfDay();
+        Map<Long, LocalDateTime> last = new HashMap<>();
+        for (Transaction t : transactionDAO.findAll()) {
+            last.merge(t.idCompteSource(), t.date(),
+                    (a, b) -> b.isAfter(a) ? b : a);
+        }
+        List<Long> inactifs = new ArrayList<>();
+        for (Compte c : compteDAO.findAll()) {
+            LocalDateTime l = last.get(c.getId());
+            if (l == null || l.isBefore(seuil)) inactifs.add(c.getId());
+        }
+        return inactifs;
     }
 }
