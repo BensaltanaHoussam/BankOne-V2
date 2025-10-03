@@ -5,11 +5,11 @@ import java.util.List;
 import java.util.Optional;
 
 public interface CompteDAO {
-    Compte save(Compte compte);
+    Compte save(Compte compte);                     // INSERT
     Optional<Compte> findById(Long id);
     Optional<Compte> findByNumero(String numero);
     List<Compte> findByClient(Long idClient);
     List<Compte> findAll();
-    boolean update(Compte compte);
+    boolean update(Compte compte);                  // UPDATE complet
     boolean delete(Long id);
 }

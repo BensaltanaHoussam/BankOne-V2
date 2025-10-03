@@ -3,8 +3,8 @@ package dao;
 import entities.Compte;
 import entities.CompteCourant;
 import entities.CompteEpargne;
+import utils.DBConnection;
 
-import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.util.ArrayList;
@@ -13,16 +13,10 @@ import java.util.Optional;
 
 public class CompteDAOImpl implements CompteDAO {
 
-    private final DataSource dataSource;
-
-    public CompteDAOImpl(DataSource dataSource) {
-        this.dataSource = dataSource;
-    }
-
     @Override
     public Compte save(Compte compte) {
         final String sql = "INSERT INTO Compte(numero, solde, typeCompte, decouvertAutorise, tauxInteret, idClient) VALUES(?,?,?,?,?,?)";
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
             ps.setString(1, compte.getNumero());
@@ -58,7 +52,7 @@ public class CompteDAOImpl implements CompteDAO {
     @Override
     public Optional<Compte> findById(Long id) {
         final String sql = baseSelect() + " WHERE c.id=?";
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
@@ -73,7 +67,7 @@ public class CompteDAOImpl implements CompteDAO {
     @Override
     public Optional<Compte> findByNumero(String numero) {
         final String sql = baseSelect() + " WHERE c.numero=?";
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
             ps.setString(1, numero);
             try (ResultSet rs = ps.executeQuery()) {
@@ -89,7 +83,7 @@ public class CompteDAOImpl implements CompteDAO {
     public List<Compte> findByClient(Long idClient) {
         final String sql = baseSelect() + " WHERE c.idClient=?";
         List<Compte> list = new ArrayList<>();
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
             ps.setLong(1, idClient);
             try (ResultSet rs = ps.executeQuery()) {
@@ -105,7 +99,7 @@ public class CompteDAOImpl implements CompteDAO {
     public List<Compte> findAll() {
         final String sql = baseSelect();
         List<Compte> list = new ArrayList<>();
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) list.add(map(rs));
@@ -118,7 +112,7 @@ public class CompteDAOImpl implements CompteDAO {
     @Override
     public boolean update(Compte compte) {
         final String sql = "UPDATE Compte SET numero=?, solde=?, typeCompte=?, decouvertAutorise=?, tauxInteret=?, idClient=? WHERE id=?";
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
 
             String type;
@@ -151,7 +145,7 @@ public class CompteDAOImpl implements CompteDAO {
     @Override
     public boolean delete(Long id) {
         final String sql = "DELETE FROM Compte WHERE id=?";
-        try (Connection cn = dataSource.getConnection();
+        try (Connection cn = DBConnection.getConnection();
              PreparedStatement ps = cn.prepareStatement(sql)) {
             ps.setLong(1, id);
             return ps.executeUpdate() == 1;
@@ -174,15 +168,14 @@ public class CompteDAOImpl implements CompteDAO {
                     rs.getLong("idClient"),
                     rs.getBigDecimal("decouvertAutorise")
             );
-        } else {
-            return new CompteEpargne(
-                    rs.getLong("id"),
-                    rs.getString("numero"),
-                    rs.getBigDecimal("solde"),
-                    rs.getLong("idClient"),
-                    rs.getBigDecimal("tauxInteret")
-            );
         }
+        return new CompteEpargne(
+                rs.getLong("id"),
+                rs.getString("numero"),
+                rs.getBigDecimal("solde"),
+                rs.getLong("idClient"),
+                rs.getBigDecimal("tauxInteret")
+        );
     }
 
     private Compte withId(Compte original, Long newId) {
